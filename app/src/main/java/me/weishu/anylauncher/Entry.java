@@ -6,6 +6,7 @@ import android.content.Intent;
 import android.util.Log;
 import android.view.View;
 
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.IXposedHookLoadPackage;
@@ -29,13 +30,20 @@ public final class Entry implements IXposedHookLoadPackage {
             return;
         }
 
-        XposedHelpers.findAndHookMethod("com.android.systemui.assist.PhoneStateMonitor", classLoader, "onDefaultHomeChanged", new XC_MethodHook() {
+        XC_MethodHook skipDefaultHomeChange = new XC_MethodHook() {
             @Override
             protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                 super.beforeHookedMethod(param);
                 param.setResult(null);
             }
-        });
+        };
+
+        boolean hooked = tryHookMethod("com.android.systemui.assist.PhoneStateMonitorController",
+                classLoader, "onDefaultHomeChanged", skipDefaultHomeChange, ComponentName.class);
+        if (!hooked) {
+            tryHookMethod("com.android.systemui.assist.PhoneStateMonitor",
+                    classLoader, "onDefaultHomeChanged", skipDefaultHomeChange);
+        }
     }
 
     private void hookMiuiHome(String pkg, ClassLoader classLoader) {
@@ -43,87 +51,131 @@ public final class Entry implements IXposedHookLoadPackage {
             return;
         }
 
+        XC_MethodHook forceUsePocoAsDefaultHome = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                super.beforeHookedMethod(param);
+                param.setResult(true);
+            }
+        };
+        boolean defaultHomeHooked = tryHookMethod("com.miui.home.common.utils.BuildConfigUtils",
+                classLoader, "isUsePocoHomeAsDefaultHome", forceUsePocoAsDefaultHome, Context.class);
+        if (!defaultHomeHooked) {
+            tryHookMethod("com.miui.home.launcher.common.Utilities",
+                    classLoader, "isUsePocoHomeAsDefaultHome", forceUsePocoAsDefaultHome, Context.class);
+        }
+
+        tryHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader,
+                "setIsUseMiuiHomeAsDefaultHome", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        log("setIsUseMiuiHomeAsDefaultHome: " + param.args[0]);
+                        param.setResult(null);
+                    }
+                }, boolean.class);
+
+        tryHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader,
+                "updateFsgWindowState", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        super.beforeHookedMethod(param);
+                        boolean mIsUseMiuiHomeAsDefaultHome =
+                                XposedHelpers.getBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome");
+                        log("mIsUseMiuiHomeAsDefaultHome: " + mIsUseMiuiHomeAsDefaultHome);
+                        XposedHelpers.setBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome", true);
+                    }
+                });
+
+        tryHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader,
+                "updateUseLauncherRecentsAndFsGesture", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        super.beforeHookedMethod(param);
+                        XposedHelpers.setBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome", true);
+                    }
+                });
+
+        AtomicBoolean isRecent = new AtomicBoolean(false);
+        tryHookMethod("com.miui.home.recents.NavStubView", classLoader, "performAppToHome", new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                super.beforeHookedMethod(param);
+                log("performAppToHome");
+                View view = (View) param.thisObject;
+                Context context = view.getContext();
+
+                log("context: " + context);
+
+                Runnable runnable = () -> {
+                    if (isRecent.get()) {
+                        isRecent.set(false);
+                        startRecentsActivity(context);
+                    } else {
+                        startHomeActivity(context);
+                    }
+                };
+
+                view.postDelayed(runnable, 100);
+                startAppToHomeAnimCompat(param.thisObject);
+            }
+        });
+
+        tryHookMethod("com.miui.home.recents.NavStubView", classLoader,
+                "performAppToRecents", new XC_MethodHook() {
+                    @Override
+                    protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
+                        super.beforeHookedMethod(param);
+                        log("performAppToRecents");
+                        isRecent.set(true);
+                    }
+                }, boolean.class);
+    }
+
+    private static boolean tryHookMethod(String className, ClassLoader classLoader, String methodName,
+                                         XC_MethodHook callback, Object... parameterTypes) {
+        Object[] args = Arrays.copyOf(parameterTypes, parameterTypes.length + 1);
+        args[parameterTypes.length] = callback;
         try {
-            // make ourself be treated as default home
-            XposedHelpers.findAndHookMethod("com.miui.home.launcher.common.Utilities", classLoader, "isUsePocoHomeAsDefaultHome", android.content.Context.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    super.beforeHookedMethod(param);
-                    param.setResult(true);
-                }
-            });
-
-            XposedHelpers.findAndHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader, "setIsUseMiuiHomeAsDefaultHome", boolean.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    log("setIsUseMiuiHomeAsDefaultHome: " + param.args[0]);
-                    param.setResult(null);
-                }
-            });
-
-            XposedHelpers.findAndHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader, "updateFsgWindowState", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    super.beforeHookedMethod(param);
-                    boolean mIsUseMiuiHomeAsDefaultHome = XposedHelpers.getBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome");
-                    log("mIsUseMiuiHomeAsDefaultHome: " + mIsUseMiuiHomeAsDefaultHome);
-                    XposedHelpers.setBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome", true);
-                }
-            });
-
-            XposedHelpers.findAndHookMethod("com.miui.home.recents.BaseRecentsImpl", classLoader, "updateUseLauncherRecentsAndFsGesture", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    super.beforeHookedMethod(param);
-                    XposedHelpers.setBooleanField(param.thisObject, "mIsUseMiuiHomeAsDefaultHome", true);
-                }
-            });
-
-            AtomicBoolean isRecent = new AtomicBoolean(false);
-            XposedHelpers.findAndHookMethod("com.miui.home.recents.NavStubView", classLoader, "performAppToHome", new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    super.beforeHookedMethod(param);
-                    log("performAppToHome");
-                    View view = (View) param.thisObject;
-                    Context context = view.getContext();
-
-                    log("context: " + context);
-
-                    // TODO: Add animation!
-                    Runnable runnable = () -> {
-                        if (isRecent.get()) {
-                            isRecent.set(false);
-                            Intent intent = new Intent();
-                            ComponentName componentName = ComponentName.unflattenFromString("com.miui.home/.recents.RecentsActivity");
-                            intent.setComponent(componentName);
-
-                            intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
-                            context.startActivity(intent);
-                        } else {
-                            Intent startMain = new Intent(Intent.ACTION_MAIN);
-                            startMain.addCategory(Intent.CATEGORY_HOME);
-                            startMain.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
-                            context.startActivity(startMain);
-                        }
-                    };
-
-                    view.postDelayed(runnable, 100);
-                    XposedHelpers.callMethod(param.thisObject, "startAppToHomeAnim");
-                }
-            });
-
-            XposedHelpers.findAndHookMethod("com.miui.home.recents.NavStubView", classLoader, "performAppToRecents", boolean.class, new XC_MethodHook() {
-                @Override
-                protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    super.beforeHookedMethod(param);
-                    log("performAppToRecents");
-                    isRecent.set(true);
-                }
-            });
-
+            XposedHelpers.findAndHookMethod(className, classLoader, methodName, args);
+            log("hooked " + className + "#" + methodName);
+            return true;
         } catch (Throwable e) {
-            log("hookMiuiHome: ", e);
+            log("skip hook " + className + "#" + methodName, e);
+            return false;
+        }
+    }
+
+    private static void startAppToHomeAnimCompat(Object navStubView) {
+        if (tryCallMethod(navStubView, "startAppToHomeAnim")) {
+            return;
+        }
+        if (tryCallMethod(navStubView, "startAppToHomeAnim", new Object[]{null})) {
+            return;
+        }
+        log("skip call startAppToHomeAnim");
+    }
+
+    private static void startRecentsActivity(Context context) {
+        Intent intent = new Intent();
+        ComponentName componentName = ComponentName.unflattenFromString("com.miui.home/.recents.RecentsActivity");
+        intent.setComponent(componentName);
+        intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(intent);
+    }
+
+    private static void startHomeActivity(Context context) {
+        Intent startMain = new Intent(Intent.ACTION_MAIN);
+        startMain.addCategory(Intent.CATEGORY_HOME);
+        startMain.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
+        context.startActivity(startMain);
+    }
+
+    private static boolean tryCallMethod(Object receiver, String methodName, Object... args) {
+        try {
+            XposedHelpers.callMethod(receiver, methodName, args);
+            return true;
+        } catch (Throwable ignored) {
+            return false;
         }
     }
 
