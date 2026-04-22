@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace 'me.weishu.anylauncher'
+    namespace 'com.lolicon.launcher'
     compileSdk 34
 
     defaultConfig {
-        applicationId "me.weishu.anylauncher"
+        applicationId "com.lolicon.launcher"
         minSdk 33
         targetSdk 34
         versionCode 1

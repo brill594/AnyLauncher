@@ -20,7 +20,7 @@
             android:value="com.miui.home;com.android.systemui" />
         <meta-data
             android:name="xposeddescription"
-            android:value="AnyLauncher is OK for MIUI!" />
+            android:value="Launcher is OK for MIUI!" />
         <meta-data
             android:name="xposedminversion"
             android:value="52+" />

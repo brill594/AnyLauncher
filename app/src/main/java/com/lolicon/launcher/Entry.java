@@ -1,4 +1,4 @@
-package me.weishu.anylauncher;
+package com.lolicon.launcher;
 
 import android.content.ComponentName;
 import android.content.Context;
@@ -106,16 +106,14 @@ public final class Entry implements IXposedHookLoadPackage {
 
                 log("context: " + context);
 
-                Runnable runnable = () -> {
-                    if (isRecent.get()) {
-                        isRecent.set(false);
-                        startRecentsActivity(context);
-                    } else {
-                        startHomeActivity(context);
-                    }
-                };
+                if (isRecent.getAndSet(false)) {
+                    // Prefer MIUI's own recents entrypoint so overview is shown as a gesture
+                    // transition instead of a plain activity switch animation.
+                    view.post(() -> startRecentsActivityCompat(param.thisObject, context));
+                    return;
+                }
 
-                view.postDelayed(runnable, 100);
+                view.postDelayed(() -> startHomeActivity(context), 100);
                 startAppToHomeAnimCompat(param.thisObject);
             }
         });
@@ -155,11 +153,33 @@ public final class Entry implements IXposedHookLoadPackage {
         log("skip call startAppToHomeAnim");
     }
 
-    private static void startRecentsActivity(Context context) {
+    private static void startRecentsActivityCompat(Object navStubView, Context context) {
+        if (tryCallMethod(navStubView, "startRecentsActivityHyper")) {
+            return;
+        }
+        if (tryCallMethod(navStubView, "startRecentsActivityAtLeastW")) {
+            return;
+        }
+        if (tryCallMethod(navStubView, "startRecentsActivityAtLeastU")) {
+            return;
+        }
+        if (tryCallMethod(navStubView, "startRecentsActivityAtLeastS")) {
+            return;
+        }
+        if (tryCallMethod(navStubView, "startRecentsActivity")) {
+            return;
+        }
+        log("fallback to explicit RecentsActivity launch");
+        startRecentsActivityFallback(context);
+    }
+
+    private static void startRecentsActivityFallback(Context context) {
         Intent intent = new Intent();
         ComponentName componentName = ComponentName.unflattenFromString("com.miui.home/.recents.RecentsActivity");
         intent.setComponent(componentName);
-        intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT | Intent.FLAG_ACTIVITY_NEW_TASK);
+        intent.setFlags(Intent.FLAG_ACTIVITY_BROUGHT_TO_FRONT
+                | Intent.FLAG_ACTIVITY_NEW_TASK
+                | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         context.startActivity(intent);
     }
 
@@ -179,7 +199,7 @@ public final class Entry implements IXposedHookLoadPackage {
         }
     }
 
-    private static final String TAG = "AnyLauncher";
+    private static final String TAG = "Launcher";
 
     public static void log(CharSequence msg) {
         if (msg == null) {
